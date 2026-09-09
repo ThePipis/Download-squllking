@@ -10,8 +10,10 @@ import {
   Film,
   Clock,
   Folder,
+  FolderOpen,
   FileText,
   ChevronDown,
+  ChevronRight,
   FileSpreadsheet,
   CheckCircle2,
   StopCircle,
@@ -38,6 +40,12 @@ interface CourseVideoListProps {
   isDownloadingZip?: boolean;
 }
 
+interface SectionGroup {
+  sectionName: string;
+  sectionOrder: number;
+  videos: SkoolVideo[];
+}
+
 export const CourseVideoList: React.FC<CourseVideoListProps> = ({
   courseTitle,
   courseDesc,
@@ -59,6 +67,7 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [isBatchDownloading, setIsBatchDownloading] = useState(false);
   const [selectedVideoIds, setSelectedVideoIds] = useState<Set<string>>(new Set());
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
 
   // Unique sections
   const sections = useMemo(() => {
@@ -79,6 +88,49 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
       return matchQuery && matchSection;
     });
   }, [videos, searchTerm, selectedSection]);
+
+  // Group filtered lessons by Section/Module in canonical order
+  const sectionGroups = useMemo(() => {
+    const map = new Map<string, SectionGroup>();
+    filteredVideos.forEach((v) => {
+      const sec = v.section || 'General';
+      if (!map.has(sec)) {
+        map.set(sec, {
+          sectionName: sec,
+          sectionOrder: v.sectionOrder || 1,
+          videos: [],
+        });
+      }
+      map.get(sec)!.videos.push(v);
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.sectionOrder - b.sectionOrder);
+  }, [filteredVideos]);
+
+  const toggleSectionCollapse = (sectionName: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(sectionName)) next.delete(sectionName);
+      else next.add(sectionName);
+      return next;
+    });
+  };
+
+  const expandAllSections = () => setCollapsedSections(new Set());
+  const collapseAllSections = () => {
+    setCollapsedSections(new Set(sectionGroups.map((g) => g.sectionName)));
+  };
+
+  const toggleSelectSection = (sectionVideos: SkoolVideo[]) => {
+    const allSelected = sectionVideos.every((v) => selectedVideoIds.has(v.id));
+    const next = new Set(selectedVideoIds);
+    if (allSelected) {
+      sectionVideos.forEach((v) => next.delete(v.id));
+    } else {
+      sectionVideos.forEach((v) => next.add(v.id));
+    }
+    setSelectedVideoIds(next);
+  };
 
   const handleCopyLink = (video: SkoolVideo) => {
     if (!video.videoLink) return;
@@ -152,7 +204,7 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
     const content = filteredVideos
       .map(
         (v, i) =>
-          `${i + 1}. [${v.section}] ${v.title} => ${v.videoLink || 'Sin video (Lección de texto)'}`
+          `${v.orderIndex ?? (i + 1)}. [${v.section}] ${v.title} => ${v.videoLink || 'Sin video (Lección de texto)'}`
       )
       .join('\n');
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -191,7 +243,8 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
     }*\n\n---\n\n`;
 
     targets.forEach((v, idx) => {
-      fullMarkdown += `## ${idx + 1}. ${v.title}\n`;
+      const lessonNum = v.orderIndex ?? (idx + 1);
+      fullMarkdown += `## ${lessonNum}. ${v.title}\n`;
       if (v.section) fullMarkdown += `**Módulo:** ${v.section} | `;
       if (v.videoLink) fullMarkdown += `[Video](${v.videoLink})\n\n`;
       const lessonText = parseTipTapToMarkdown(v.desc);
@@ -370,217 +423,314 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
             <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
         )}
+
+        {sectionGroups.length > 1 && (
+          <div className="flex items-center gap-1.5 self-end sm:self-center">
+            <button
+              type="button"
+              onClick={expandAllSections}
+              className="px-2.5 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+              title="Expandir todos los módulos"
+            >
+              Expandir todo
+            </button>
+            <button
+              type="button"
+              onClick={collapseAllSections}
+              className="px-2.5 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+              title="Colapsar todos los módulos"
+            >
+              Colapsar
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Videos / Lessons List */}
-      <div className="space-y-3">
-        {filteredVideos.map((video, idx) => {
-          const isDownloading = downloadingId === video.id;
-          const isSelected = selectedVideoIds.has(video.id);
-          const hasVideo = Boolean(video.hasVideo !== false && video.videoLink);
-          const hasImages = Boolean(video.imageUrls && video.imageUrls.length > 0);
+      {/* Videos / Lessons Tree by Section */}
+      <div className="space-y-4">
+        {sectionGroups.map((group) => {
+          const isCollapsed = collapsedSections.has(group.sectionName);
+          const selectedInSec = group.videos.filter((v) => selectedVideoIds.has(v.id)).length;
+          const allSectionSelected = group.videos.length > 0 && selectedInSec === group.videos.length;
+          const someSectionSelected = selectedInSec > 0 && !allSectionSelected;
 
           return (
             <div
-              key={video.id}
-              className={`bg-white rounded-xl border transition-all p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                isSelected
-                  ? 'border-indigo-400 bg-indigo-50/20 shadow-xs'
-                  : 'border-slate-200 hover:border-slate-300 hover:shadow-xs'
-              }`}
+              key={group.sectionName}
+              className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs transition-shadow hover:shadow-sm"
             >
-              {/* Left Column: Checkbox, Number, Info */}
-              <div className="flex items-start sm:items-center gap-3.5 flex-1 min-w-0">
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => toggleSelectOne(video.id)}
-                  className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 mt-1 sm:mt-0 cursor-pointer"
-                />
-
-                <span className="w-7 h-7 rounded-lg bg-slate-100 text-slate-600 font-bold text-xs flex items-center justify-center shrink-0">
-                  {idx + 1}
-                </span>
-
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 uppercase">
-                      {video.section || 'General'}
-                    </span>
-
-                    {/* Lesson Type Badge */}
-                    {hasVideo ? (
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                          video.provider === 'loom'
-                            ? 'bg-amber-100 text-amber-800 font-bold'
-                            : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        {video.provider === 'loom' ? 'Loom (1080p MP4)' : video.provider}
-                      </span>
+              {/* Section Header Accordion Bar */}
+              <div
+                className="flex items-center justify-between px-4 py-3 bg-slate-50/90 border-b border-slate-200/80 cursor-pointer select-none gap-3 hover:bg-slate-100/80 transition-colors"
+                onClick={() => toggleSectionCollapse(group.sectionName)}
+              >
+                <div className="flex items-center gap-3 min-w-0" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={allSectionSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSectionSelected;
+                    }}
+                    onChange={() => toggleSelectSection(group.videos)}
+                    className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                    title="Seleccionar todas las lecciones de esta sección"
+                  />
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isCollapsed ? (
+                      <Folder className="w-4 h-4 text-indigo-600 shrink-0" />
                     ) : (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 uppercase flex items-center gap-1">
-                        <Code className="w-3 h-3" />
-                        Texto / Código
-                      </span>
+                      <FolderOpen className="w-4 h-4 text-indigo-600 shrink-0" />
                     )}
-
-                    {hasImages && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
-                        <ImageIcon className="w-3 h-3" />
-                        {video.imageUrls!.length} imágenes
-                      </span>
-                    )}
-
-                    {video.durationMs ? (
-                      <span className="text-[11px] text-slate-400 flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {formatDuration(video.durationMs)}
-                      </span>
-                    ) : null}
+                    <h2 className="font-bold text-slate-900 text-sm truncate">
+                      {group.sectionOrder}. {group.sectionName}
+                    </h2>
                   </div>
+                </div>
 
-                  <h3 className="font-semibold text-slate-900 text-sm truncate" title={video.title}>
-                    {video.title}
-                  </h3>
-
-                  {video.desc && (() => {
-                    const cleanText = parseTipTapToMarkdown(video.desc)
-                      .replace(/[*_#`[\]()>-]/g, '')
-                      .trim();
-                    return cleanText ? (
-                      <p className="text-xs text-slate-500 line-clamp-1">{cleanText}</p>
-                    ) : null;
-                  })()}
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200/80 text-slate-700 font-medium">
+                    {group.videos.length} {group.videos.length === 1 ? 'lección' : 'lecciones'}
+                  </span>
+                  {selectedInSec > 0 && (
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-bold">
+                      {selectedInSec} sel.
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSectionCollapse(group.sectionName);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-700 rounded-md transition-colors cursor-pointer"
+                  >
+                    <ChevronDown
+                      className={`w-4 h-4 transform transition-transform duration-200 ${
+                        isCollapsed ? '-rotate-90' : 'rotate-0'
+                      }`}
+                    />
+                  </button>
                 </div>
               </div>
 
-              {/* Right Column: Actions */}
-              <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                {/* Notes button */}
-                <button
-                  type="button"
-                  onClick={() => onOpenNotes && onOpenNotes(video)}
-                  title="Ver texto y notas de la lección (.md)"
-                  className="px-2.5 py-2 text-xs font-medium text-slate-700 hover:text-indigo-700 bg-slate-100 hover:bg-indigo-50 rounded-lg transition-colors flex items-center gap-1.5 border border-transparent hover:border-indigo-200 cursor-pointer"
-                >
-                  <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                  <span className="hidden lg:inline">Notas (.md)</span>
-                </button>
+              {/* Section Lessons List */}
+              {!isCollapsed && (
+                <div className="p-3 space-y-2.5 bg-slate-50/30">
+                  {group.videos.map((video, vIdx) => {
+                    const isDownloading = downloadingId === video.id;
+                    const isSelected = selectedVideoIds.has(video.id);
+                    const hasVideo = Boolean(video.hasVideo !== false && video.videoLink);
+                    const hasImages = Boolean(video.imageUrls && video.imageUrls.length > 0);
+                    const lessonNum = video.lessonOrderInSection ?? (vIdx + 1);
 
-                {/* Copy link (if video exists) */}
-                {hasVideo && (
-                  <button
-                    type="button"
-                    onClick={() => handleCopyLink(video)}
-                    title="Copiar vínculo directo"
-                    className="p-2 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
-                  >
-                    {copiedId === video.id ? (
-                      <Check className="w-4 h-4 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
-                )}
+                    return (
+                      <div
+                        key={video.id}
+                        className={`bg-white rounded-lg border transition-all p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 ${
+                          isSelected
+                            ? 'border-indigo-400 bg-indigo-50/25 shadow-xs'
+                            : 'border-slate-200 hover:border-slate-300 hover:shadow-xs'
+                        }`}
+                      >
+                        {/* Left Column: Checkbox, Lesson # in Section, Info */}
+                        <div className="flex items-start sm:items-center gap-3 flex-1 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectOne(video.id)}
+                            className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 mt-1 sm:mt-0 cursor-pointer"
+                          />
 
-                {/* Preview (if video exists) */}
-                {hasVideo && (
-                  <button
-                    type="button"
-                    onClick={() => onPreviewVideo(video)}
-                    title="Previsualizar video"
-                    className="px-3 py-2 text-xs font-medium text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Play className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
-                    <span className="hidden md:inline">Ver</span>
-                  </button>
-                )}
+                          <span className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold text-xs flex items-center justify-center shrink-0">
+                            {lessonNum}
+                          </span>
 
-                {/* Download Button */}
-                {hasVideo ? (
-                  (() => {
-                    const activeTask = downloadTasks.find(
-                      (t) =>
-                        t.videoId === video.id &&
-                        (t.status === 'downloading' || t.status === 'resolving')
-                    );
-                    const completedTask = downloadTasks.find(
-                      (t) => t.videoId === video.id && t.status === 'completed'
-                    );
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {/* Lesson Type Badge */}
+                              {hasVideo ? (
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                                    video.provider === 'loom'
+                                      ? 'bg-amber-100 text-amber-800 font-bold'
+                                      : 'bg-slate-100 text-slate-700'
+                                  }`}
+                                >
+                                  {video.provider === 'loom' ? 'Loom (1080p MP4)' : video.provider}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 uppercase flex items-center gap-1">
+                                  <Code className="w-3 h-3" />
+                                  Texto / Código
+                                </span>
+                              )}
 
-                    if (activeTask) {
-                      return (
-                        <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 rounded-lg p-1">
+                              {hasImages && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
+                                  <ImageIcon className="w-3 h-3" />
+                                  {video.imageUrls!.length} imágenes
+                                </span>
+                              )}
+
+                              {video.durationMs ? (
+                                <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {formatDuration(video.durationMs)}
+                                </span>
+                              ) : null}
+
+                              {video.orderIndex && (
+                                <span className="text-[10px] text-slate-400 font-medium ml-1">
+                                  (Curso #{video.orderIndex})
+                                </span>
+                              )}
+                            </div>
+
+                            <h3 className="font-semibold text-slate-900 text-sm truncate" title={video.title}>
+                              {video.title}
+                            </h3>
+
+                            {video.desc && (() => {
+                              const cleanText = parseTipTapToMarkdown(video.desc)
+                                .replace(/[*_#`[\]()>-]/g, '')
+                                .trim();
+                              return cleanText ? (
+                                <p className="text-xs text-slate-500 line-clamp-1">{cleanText}</p>
+                              ) : null;
+                            })()}
+                          </div>
+                        </div>
+
+                        {/* Right Column: Actions */}
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                          {/* Notes button */}
                           <button
                             type="button"
-                            onClick={onOpenDownloadManager}
-                            className="px-2.5 py-1 text-xs font-semibold text-emerald-800 flex items-center gap-1.5 hover:text-emerald-900 cursor-pointer"
+                            onClick={() => onOpenNotes && onOpenNotes(video)}
+                            title="Ver texto y notas de la lección (.md)"
+                            className="px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:text-indigo-700 bg-slate-100 hover:bg-indigo-50 rounded-lg transition-colors flex items-center gap-1.5 border border-transparent hover:border-indigo-200 cursor-pointer"
                           >
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                            <span>
-                              {activeTask.status === 'resolving'
-                                ? 'Resolviendo...'
-                                : `${activeTask.progress.toFixed(0)}%`}
-                            </span>
+                            <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                            <span className="hidden lg:inline">Notas (.md)</span>
                           </button>
-                          {onCancelDownload && (
+
+                          {/* Copy link (if video exists) */}
+                          {hasVideo && (
                             <button
                               type="button"
-                              onClick={() => onCancelDownload(activeTask.id)}
-                              className="p-1 text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
-                              title="Detener descarga"
+                              onClick={() => handleCopyLink(video)}
+                              title="Copiar vínculo directo"
+                              className="p-1.5 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                             >
-                              <StopCircle className="w-3.5 h-3.5" />
+                              {copiedId === video.id ? (
+                                <Check className="w-4 h-4 text-emerald-600" />
+                              ) : (
+                                <Copy className="w-4 h-4" />
+                              )}
+                            </button>
+                          )}
+
+                          {/* Preview (if video exists) */}
+                          {hasVideo && (
+                            <button
+                              type="button"
+                              onClick={() => onPreviewVideo(video)}
+                              title="Previsualizar video"
+                              className="px-3 py-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
+                              <span className="hidden md:inline">Ver</span>
+                            </button>
+                          )}
+
+                          {/* Download Button */}
+                          {hasVideo ? (
+                            (() => {
+                              const activeTask = downloadTasks.find(
+                                (t) =>
+                                  t.videoId === video.id &&
+                                  (t.status === 'downloading' || t.status === 'resolving')
+                              );
+                              const completedTask = downloadTasks.find(
+                                (t) => t.videoId === video.id && t.status === 'completed'
+                              );
+
+                              if (activeTask) {
+                                return (
+                                  <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 rounded-lg p-1">
+                                    <button
+                                      type="button"
+                                      onClick={onOpenDownloadManager}
+                                      className="px-2.5 py-1 text-xs font-semibold text-emerald-800 flex items-center gap-1.5 hover:text-emerald-900 cursor-pointer"
+                                    >
+                                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                      <span>
+                                        {activeTask.status === 'resolving'
+                                          ? 'Resolviendo...'
+                                          : `${activeTask.progress.toFixed(0)}%`}
+                                      </span>
+                                    </button>
+                                    {onCancelDownload && (
+                                      <button
+                                        type="button"
+                                        onClick={() => onCancelDownload(activeTask.id)}
+                                        className="p-1 text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
+                                        title="Detener descarga"
+                                      >
+                                        <StopCircle className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              }
+
+                              if (completedTask) {
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={onOpenDownloadManager}
+                                    className="px-3 py-1.5 text-xs font-semibold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs border border-emerald-300 cursor-pointer"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span>Listo</span>
+                                  </button>
+                                );
+                              }
+
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownload(video)}
+                                  disabled={isDownloading}
+                                  className="px-3.5 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-400 text-white rounded-lg transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                                >
+                                  <Download
+                                    className={`w-3.5 h-3.5 ${isDownloading ? 'animate-bounce' : ''}`}
+                                  />
+                                  <span>{isDownloading ? 'Iniciando...' : 'Descargar .MP4'}</span>
+                                </button>
+                              );
+                            })()
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const mdContent = buildLessonMarkdown(video, courseTitle, communityName);
+                                downloadMarkdownFile(mdContent, `${video.title}.md`);
+                              }}
+                              className="px-3 py-1.5 text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                              title="Descargar esta lección de texto y código en Markdown (.md)"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Guardar .MD</span>
                             </button>
                           )}
                         </div>
-                      );
-                    }
-
-                    if (completedTask) {
-                      return (
-                        <button
-                          type="button"
-                          onClick={onOpenDownloadManager}
-                          className="px-3 py-2 text-xs font-semibold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs border border-emerald-300 cursor-pointer"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Listo</span>
-                        </button>
-                      );
-                    }
-
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => handleDownload(video)}
-                        disabled={isDownloading}
-                        className="px-4 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-400 text-white rounded-lg transition-colors flex items-center gap-2 shadow-xs cursor-pointer"
-                      >
-                        <Download
-                          className={`w-3.5 h-3.5 ${isDownloading ? 'animate-bounce' : ''}`}
-                        />
-                        <span>{isDownloading ? 'Iniciando...' : 'Descargar .MP4'}</span>
-                      </button>
+                      </div>
                     );
-                  })()
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const mdContent = buildLessonMarkdown(video, courseTitle, communityName);
-                      downloadMarkdownFile(mdContent, `${video.title}.md`);
-                    }}
-                    className="px-3.5 py-2 text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
-                    title="Descargar esta lección de texto y código en Markdown (.md)"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Guardar .MD</span>
-                  </button>
-                )}
-              </div>
+                  })}
+                </div>
+              )}
             </div>
           );
         })}

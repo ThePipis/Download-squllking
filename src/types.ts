@@ -39,6 +39,11 @@ export interface SkoolVideo {
   hasImages?: boolean;
   imageUrls?: string[];
   unitType?: string;
+  orderIndex?: number;
+  sectionOrder?: number;
+  totalSectionsInCourse?: number;
+  lessonOrderInSection?: number;
+  totalLessonsInSection?: number;
 }
 
 export interface ZipBatchProgress {

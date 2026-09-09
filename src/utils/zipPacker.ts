@@ -123,6 +123,7 @@ export interface PackageCourseOptions {
   courseTitle: string;
   communityName?: string;
   videos: SkoolVideo[];
+  totalCourseLessons?: number;
   cookies: CookieItem[];
   includeVideos?: boolean;
   includeMarkdown?: boolean;
@@ -141,6 +142,7 @@ export async function addCourseToZip(
     courseTitle,
     communityName,
     videos,
+    totalCourseLessons,
     cookies,
     includeVideos = true,
     includeMarkdown = true,
@@ -155,21 +157,44 @@ export async function addCourseToZip(
     : zipParent.folder(safeCourseName)!;
 
   const totalLessons = videos.length;
+  // Calculate maxOrder to format padding correctly (e.g., 01..05 or 01..120)
+  const maxOrder = Math.max(
+    totalCourseLessons || 0,
+    ...videos.map((v) => v.orderIndex || 0),
+    totalLessons
+  );
 
   for (let idx = 0; idx < totalLessons; idx++) {
     if (signal?.aborted) throw new Error('Proceso cancelado por el usuario');
 
     const video = videos[idx];
-    const lessonNum = padNumber(idx + 1, totalLessons);
+    
+    // 1. Calculate section folder with proper ordering
+    const sectionName = video.section || 'General';
+    const safeSectionName = sanitizeFilename(sectionName);
+    const sectionOrder = video.sectionOrder || 1;
+    const maxSections = Math.max(
+      video.totalSectionsInCourse || 1,
+      ...videos.map((v) => v.sectionOrder || 1),
+      1
+    );
+    const secNum = padNumber(sectionOrder, maxSections);
+    const sectionFolder = courseFolder.folder(`${secNum}. ${safeSectionName}`)!;
+
+    // 2. Calculate lesson subfolder with section-relative ordering
+    const lessonOrder = video.lessonOrderInSection || video.orderIndex || (idx + 1);
+    const maxLessonsInSection = Math.max(
+      video.totalLessonsInSection || 1,
+      ...videos
+        .filter((v) => (v.section || 'General') === sectionName)
+        .map((v) => v.lessonOrderInSection || 1),
+      1
+    );
+    const lessonNum = padNumber(lessonOrder, maxLessonsInSection);
     const safeLessonTitle = sanitizeFilename(video.title);
 
-    // If lesson belongs to a named section, include it cleanly
-    const sectionPrefix =
-      video.section && video.section !== 'General' && video.section !== courseTitle
-        ? `${sanitizeFilename(video.section)} - `
-        : '';
-
-    const lessonFolder = courseFolder.folder(`${lessonNum}. ${sectionPrefix}${safeLessonTitle}`)!;
+    // Subfolder for the lesson inside its section folder
+    const lessonFolder = sectionFolder.folder(`${lessonNum}. ${safeLessonTitle}`)!;
 
     onProgress?.({
       status: 'downloading',
@@ -178,9 +203,9 @@ export async function addCourseToZip(
       currentCourseTitle: courseTitle,
       totalLessons,
       currentLessonIndex: idx + 1,
-      currentLessonTitle: video.title,
+      currentLessonTitle: `${secNum}.${lessonNum}. ${video.title}`,
       overallPercent: Math.round(((idx + 0.1) / totalLessons) * 100),
-      message: `Procesando (${idx + 1}/${totalLessons}): "${video.title}"`,
+      message: `Procesando [${secNum}.${lessonNum}] (${idx + 1}/${totalLessons}): "${video.title}"`,
     });
 
     // 1. Download Video if present and requested
@@ -364,6 +389,7 @@ export async function downloadCommunityClassroomZip(
         courseTitle: course.title,
         communityName,
         videos,
+        totalCourseLessons: videos.length,
         cookies,
         includeVideos,
         includeMarkdown,

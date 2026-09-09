@@ -86,6 +86,39 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  const normalizeCourseVideos = (videos: SkoolVideo[]): SkoolVideo[] => {
+    const sectionList: string[] = [];
+    videos.forEach((v) => {
+      const sec = v.section || 'General';
+      if (!sectionList.includes(sec)) {
+        sectionList.push(sec);
+      }
+    });
+
+    const sectionLessonTotals = new Map<string, number>();
+    videos.forEach((v) => {
+      const sec = v.section || 'General';
+      sectionLessonTotals.set(sec, (sectionLessonTotals.get(sec) || 0) + 1);
+    });
+
+    const sectionCurrentIndices = new Map<string, number>();
+    return videos.map((v, globalIdx) => {
+      const sec = v.section || 'General';
+      const currentLessonInSec = (sectionCurrentIndices.get(sec) || 0) + 1;
+      sectionCurrentIndices.set(sec, currentLessonInSec);
+
+      return {
+        ...v,
+        section: sec,
+        sectionOrder: v.sectionOrder ?? (sectionList.indexOf(sec) + 1),
+        totalSectionsInCourse: v.totalSectionsInCourse ?? sectionList.length,
+        lessonOrderInSection: v.lessonOrderInSection ?? currentLessonInSec,
+        totalLessonsInSection: v.totalLessonsInSection ?? (sectionLessonTotals.get(sec) || 1),
+        orderIndex: v.orderIndex ?? (globalIdx + 1),
+      };
+    });
+  };
+
   // Perform scrape by URL
   const handleScrapeUrl = async (url: string) => {
     setIsLoading(true);
@@ -100,6 +133,10 @@ export default function App() {
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Error al obtener datos de Skool');
+      }
+
+      if (data.videos && Array.isArray(data.videos)) {
+        data.videos = normalizeCourseVideos(data.videos);
       }
 
       setScrapeResult(data);
@@ -129,6 +166,10 @@ export default function App() {
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Error al analizar el código HTML');
+      }
+
+      if (data.videos && Array.isArray(data.videos)) {
+        data.videos = normalizeCourseVideos(data.videos);
       }
 
       setScrapeResult(data);
@@ -179,6 +220,7 @@ export default function App() {
         thumbnail: data.thumbnail || '',
         durationMs: (data.duration || 0) * 1000,
         hasAccess: true,
+        orderIndex: 1,
       };
 
       setScrapeResult({
@@ -432,6 +474,7 @@ export default function App() {
         courseTitle,
         communityName: scrapeResult?.communityName || 'skool',
         videos: videosToDownload,
+        totalCourseLessons: scrapeResult?.videos?.length || videosToDownload.length,
         cookies,
         includeVideos: true,
         includeMarkdown: true,

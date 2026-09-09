@@ -33,99 +33,135 @@ function detectProvider(url: string): VideoProvider {
   return 'unknown';
 }
 
-function extractVideosFromTree(node: any, sectionName = ''): SkoolVideo[] {
+function extractVideosFromTree(rootNode: any): SkoolVideo[] {
   const results: SkoolVideo[] = [];
-  if (!node) return results;
+  if (!rootNode) return results;
 
-  const item = node.course || node;
-  const title = item.metadata?.title || item.name || 'Sin título';
-  const currentSection = item.unitType === 'set' ? title : sectionName;
+  function walk(node: any, sectionName = '') {
+    if (!node) return;
 
-  // Determine if this item is a lesson/module (not a container folder/course/set)
-  const isContainer = item.unitType === 'course' || item.unitType === 'set';
-  const isLesson =
-    !isContainer &&
-    (item.unitType === 'module' || !node.children || node.children.length === 0);
+    const item = node.course || node;
+    const title = item.metadata?.title || item.name || 'Sin título';
+    const currentSection = item.unitType === 'set' ? title : sectionName;
 
-  if (isLesson) {
-    const videoLink = item.metadata?.videoLink || '';
-    const muxPlaybackId = item.metadata?.muxPlaybackId || '';
-    const directVideo = item.metadata?.video;
-    let finalVideoLink = videoLink;
+    // Determine if this item is a lesson/module (not a container folder/course/set)
+    const isContainer = item.unitType === 'course' || item.unitType === 'set';
+    const isLesson =
+      !isContainer &&
+      (item.unitType === 'module' || !node.children || node.children.length === 0);
 
-    if (!finalVideoLink && muxPlaybackId) {
-      finalVideoLink = `https://stream.mux.com/${muxPlaybackId}.m3u8`;
-    } else if (
-      !finalVideoLink &&
-      typeof directVideo === 'string' &&
-      directVideo.startsWith('http')
-    ) {
-      finalVideoLink = directVideo;
-    } else if (
-      !finalVideoLink &&
-      typeof directVideo === 'object' &&
-      directVideo?.video_url
-    ) {
-      finalVideoLink = directVideo.video_url;
-    }
+    if (isLesson) {
+      const videoLink = item.metadata?.videoLink || '';
+      const muxPlaybackId = item.metadata?.muxPlaybackId || '';
+      const directVideo = item.metadata?.video;
+      let finalVideoLink = videoLink;
 
-    let resources = [];
-    try {
-      if (typeof item.metadata?.resources === 'string') {
-        resources = JSON.parse(item.metadata.resources);
-      } else if (Array.isArray(item.metadata?.resources)) {
-        resources = item.metadata.resources;
+      if (!finalVideoLink && muxPlaybackId) {
+        finalVideoLink = `https://stream.mux.com/${muxPlaybackId}.m3u8`;
+      } else if (
+        !finalVideoLink &&
+        typeof directVideo === 'string' &&
+        directVideo.startsWith('http')
+      ) {
+        finalVideoLink = directVideo;
+      } else if (
+        !finalVideoLink &&
+        typeof directVideo === 'object' &&
+        directVideo?.video_url
+      ) {
+        finalVideoLink = directVideo.video_url;
       }
-    } catch {
-      resources = [];
+
+      let resources = [];
+      try {
+        if (typeof item.metadata?.resources === 'string') {
+          resources = JSON.parse(item.metadata.resources);
+        } else if (Array.isArray(item.metadata?.resources)) {
+          resources = item.metadata.resources;
+        }
+      } catch {
+        resources = [];
+      }
+
+      const descStr = typeof item.metadata?.desc === 'string' ? item.metadata.desc : '';
+      const hasVideo = Boolean(finalVideoLink && finalVideoLink.trim().length > 0);
+      const hasText = Boolean(descStr && descStr.trim().length > 0);
+
+      // Extract image URLs from description
+      const imageUrls: string[] = [];
+      if (descStr) {
+        const imgMatches = descStr.match(/https:\/\/[^\s"'<>\\]+?\.(?:png|jpg|jpeg|webp|gif)/gi);
+        if (imgMatches) {
+          imgMatches.forEach((img) => {
+            if (
+              !imageUrls.includes(img) &&
+              !img.includes('avatar') &&
+              !img.includes('favicon') &&
+              !img.includes('slack-protected-video')
+            ) {
+              imageUrls.push(img);
+            }
+          });
+        }
+      }
+
+      results.push({
+        id: item.id || Math.random().toString(36).substring(2),
+        title: title.trim(),
+        section: sectionName || 'General',
+        videoLink: finalVideoLink || '',
+        provider: hasVideo ? detectProvider(finalVideoLink) : 'unknown',
+        thumbnail: item.metadata?.videoThumbnail || item.metadata?.coverImage || '',
+        durationMs: item.metadata?.videoLenMs || 0,
+        hasAccess: item.metadata?.hasAccess !== 0,
+        desc: descStr,
+        resources,
+        hasVideo,
+        hasText,
+        hasImages: imageUrls.length > 0,
+        imageUrls,
+        unitType: item.unitType || 'module',
+        orderIndex: results.length + 1,
+      });
     }
 
-    const descStr = typeof item.metadata?.desc === 'string' ? item.metadata.desc : '';
-    const hasVideo = Boolean(finalVideoLink && finalVideoLink.trim().length > 0);
-    const hasText = Boolean(descStr && descStr.trim().length > 0);
-
-    // Extract image URLs from description
-    const imageUrls: string[] = [];
-    if (descStr) {
-      const imgMatches = descStr.match(/https:\/\/[^\s"'<>\\]+?\.(?:png|jpg|jpeg|webp|gif)/gi);
-      if (imgMatches) {
-        imgMatches.forEach((img) => {
-          if (
-            !imageUrls.includes(img) &&
-            !img.includes('avatar') &&
-            !img.includes('favicon') &&
-            !img.includes('slack-protected-video')
-          ) {
-            imageUrls.push(img);
-          }
-        });
+    if (node.children && Array.isArray(node.children)) {
+      for (const child of node.children) {
+        walk(child, currentSection);
       }
     }
-
-    results.push({
-      id: item.id || Math.random().toString(36).substring(2),
-      title: title.trim(),
-      section: sectionName || 'General',
-      videoLink: finalVideoLink || '',
-      provider: hasVideo ? detectProvider(finalVideoLink) : 'unknown',
-      thumbnail: item.metadata?.videoThumbnail || item.metadata?.coverImage || '',
-      durationMs: item.metadata?.videoLenMs || 0,
-      hasAccess: item.metadata?.hasAccess !== 0,
-      desc: descStr,
-      resources,
-      hasVideo,
-      hasText,
-      hasImages: imageUrls.length > 0,
-      imageUrls,
-      unitType: item.unitType || 'module',
-    });
   }
 
-  if (node.children && Array.isArray(node.children)) {
-    for (const child of node.children) {
-      results.push(...extractVideosFromTree(child, currentSection));
+  walk(rootNode, '');
+
+  // Collect ordered unique sections
+  const sectionList: string[] = [];
+  results.forEach((v) => {
+    const sec = v.section || 'General';
+    if (!sectionList.includes(sec)) {
+      sectionList.push(sec);
     }
-  }
+  });
+
+  const sectionLessonTotals = new Map<string, number>();
+  results.forEach((v) => {
+    const sec = v.section || 'General';
+    sectionLessonTotals.set(sec, (sectionLessonTotals.get(sec) || 0) + 1);
+  });
+
+  const sectionCurrentIndices = new Map<string, number>();
+  results.forEach((v, index) => {
+    const sec = v.section || 'General';
+    const currentLessonInSec = (sectionCurrentIndices.get(sec) || 0) + 1;
+    sectionCurrentIndices.set(sec, currentLessonInSec);
+
+    v.orderIndex = index + 1;
+    v.section = sec;
+    v.sectionOrder = sectionList.indexOf(sec) + 1;
+    v.totalSectionsInCourse = sectionList.length;
+    v.lessonOrderInSection = currentLessonInSec;
+    v.totalLessonsInSection = sectionLessonTotals.get(sec) || 1;
+  });
 
   return results;
 }
