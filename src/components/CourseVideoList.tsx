@@ -18,7 +18,9 @@ import {
   FileSpreadsheet,
   CheckCircle2,
   StopCircle,
+  BookOpen,
 } from 'lucide-react';
+import { parseTipTapToMarkdown, buildLessonMarkdown, downloadMarkdownFile } from '../utils/markdownExporter.ts';
 
 interface CourseVideoListProps {
   courseTitle: string;
@@ -30,6 +32,7 @@ interface CourseVideoListProps {
   onCancelDownload?: (taskId: string) => void;
   onPreviewVideo: (video: SkoolVideo) => void;
   onDownloadVideo: (video: SkoolVideo) => void;
+  onOpenNotes?: (video: SkoolVideo) => void;
   onBackToCourses?: () => void;
 }
 
@@ -43,6 +46,7 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
   onCancelDownload,
   onPreviewVideo,
   onDownloadVideo,
+  onOpenNotes,
   onBackToCourses,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -151,6 +155,40 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  const exportAllMarkdown = () => {
+    const targets = selectedVideoIds.size > 0
+      ? filteredVideos.filter((v) => selectedVideoIds.has(v.id))
+      : filteredVideos;
+
+    if (targets.length === 0) return;
+
+    let fullMarkdown = `# Curso: ${courseTitle}\n`;
+    if (communityName) fullMarkdown += `**Comunidad:** ${communityName}\n`;
+    if (courseDesc) fullMarkdown += `\n${courseDesc}\n`;
+    fullMarkdown += `\n*Exportado el ${new Date().toLocaleDateString()} - Total lecciones: ${targets.length}*\n\n---\n\n`;
+
+    targets.forEach((v, idx) => {
+      fullMarkdown += `## ${idx + 1}. ${v.title}\n`;
+      if (v.section) fullMarkdown += `**Módulo:** ${v.section} | `;
+      if (v.videoLink) fullMarkdown += `[Video](${v.videoLink})\n\n`;
+      const lessonText = parseTipTapToMarkdown(v.desc);
+      if (lessonText) {
+        fullMarkdown += `${lessonText}\n\n`;
+      }
+      if (v.resources && v.resources.length > 0) {
+        fullMarkdown += `**Recursos:**\n`;
+        v.resources.forEach((r) => {
+          fullMarkdown += `- [${r.title || 'Enlace'}](${r.url})\n`;
+        });
+        fullMarkdown += `\n`;
+      }
+      fullMarkdown += `---\n\n`;
+    });
+
+    const filename = `${courseTitle.replace(/[^a-zA-Z0-9_-]/g, '_')}_todas_las_notas.md`;
+    downloadMarkdownFile(filename, fullMarkdown);
+  };
+
   return (
     <div id="course-video-list" className="space-y-6">
       {/* Course Banner */}
@@ -216,6 +254,14 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
             >
               <FileText className="w-3.5 h-3.5" />
               Exportar Lista (.TXT)
+            </button>
+            <button
+              onClick={exportAllMarkdown}
+              title="Descargar notas y textos de las lecciones en un solo archivo Markdown"
+              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/60 rounded-lg flex items-center gap-1.5 transition-colors font-medium"
+            >
+              <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+              Exportar Notas (.MD)
             </button>
             <button
               onClick={exportAsJson}
@@ -315,14 +361,28 @@ export const CourseVideoList: React.FC<CourseVideoListProps> = ({
                     {video.title}
                   </h3>
 
-                  {video.desc && (
-                    <p className="text-xs text-slate-500 line-clamp-1">{video.desc}</p>
-                  )}
+                  {video.desc && (() => {
+                    const cleanText = parseTipTapToMarkdown(video.desc).replace(/[*_#`[\]()>-]/g, '').trim();
+                    return cleanText ? (
+                      <p className="text-xs text-slate-500 line-clamp-1">{cleanText}</p>
+                    ) : null;
+                  })()}
                 </div>
               </div>
 
               {/* Right Column: Actions */}
               <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                {/* Notes button */}
+                <button
+                  type="button"
+                  onClick={() => onOpenNotes && onOpenNotes(video)}
+                  title="Ver texto y notas de la lección (.md)"
+                  className="px-2.5 py-2 text-xs font-medium text-slate-700 hover:text-indigo-700 bg-slate-100 hover:bg-indigo-50 rounded-lg transition-colors flex items-center gap-1.5 border border-transparent hover:border-indigo-200"
+                >
+                  <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="hidden lg:inline">Notas (.md)</span>
+                </button>
+
                 {/* Copy link */}
                 <button
                   type="button"

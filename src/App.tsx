@@ -8,7 +8,9 @@ import { CookieManagerModal } from './components/CookieManagerModal.tsx';
 import { HowToGuideModal } from './components/HowToGuideModal.tsx';
 import { VideoPreviewModal } from './components/VideoPreviewModal.tsx';
 import { DownloadManager } from './components/DownloadManager.tsx';
+import { LessonNotesModal } from './components/LessonNotesModal.tsx';
 import { downloadVideoWithProgress } from './utils/downloadEngine.ts';
+import { buildLessonMarkdown, downloadMarkdownFile } from './utils/markdownExporter.ts';
 import {
   ShieldCheck,
   Key,
@@ -56,6 +58,10 @@ export default function App() {
   // Download Manager State (matches MAX Video Downloader extension logic)
   const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
   const [isDownloadManagerOpen, setIsDownloadManagerOpen] = useState(false);
+  const [autoDownloadMarkdown, setAutoDownloadMarkdown] = useState(true);
+
+  // Lesson Notes modal state
+  const [selectedNotesVideo, setSelectedNotesVideo] = useState<SkoolVideo | null>(null);
 
   // Auto-save cookies to localStorage
   const handleSaveCookies = (newCookies: CookieItem[]) => {
@@ -185,9 +191,65 @@ export default function App() {
   };
 
   // Download video directly using the MAX Video Downloader CDN engine
+  const handleUpdateVideoDesc = (videoId: string, desc: string, resources?: any[]) => {
+    setScrapeResult((prev) => {
+      if (!prev || !prev.videos) return prev;
+      return {
+        ...prev,
+        videos: prev.videos.map((v) =>
+          v.id === videoId ? { ...v, desc, resources: resources || v.resources } : v
+        ),
+      };
+    });
+    setSelectedNotesVideo((prev) =>
+      prev && prev.id === videoId ? { ...prev, desc, resources: resources || prev.resources } : prev
+    );
+  };
+
   const handleDownloadVideo = async (video: SkoolVideo) => {
+    let currentVideo = video;
+
+    // If description is missing and autoDownloadMarkdown is enabled, ensure we fetch the notes first!
+    if (
+      (!video.desc || video.desc.trim().length === 0) &&
+      scrapeResult?.communityName &&
+      (scrapeResult?.currentCourse?.name || scrapeResult?.currentCourse?.id)
+    ) {
+      try {
+        const detailRes = await fetch('/api/lesson-details', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            communityName: scrapeResult.communityName,
+            courseId: scrapeResult.currentCourse?.name || scrapeResult.currentCourse?.id,
+            lessonId: video.id,
+            cookies,
+          }),
+        });
+        if (detailRes.ok) {
+          const detailData = await detailRes.json();
+          if (detailData.success && detailData.desc) {
+            currentVideo = {
+              ...video,
+              desc: detailData.desc,
+              resources: detailData.resources || video.resources,
+            };
+            handleUpdateVideoDesc(video.id, detailData.desc, detailData.resources);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not pre-fetch lesson details:', err);
+      }
+    }
+
     const taskId = `${video.id}-${Date.now()}`;
     const abortController = new AbortController();
+
+    const markdownText = buildLessonMarkdown(
+      currentVideo,
+      scrapeResult?.currentCourse?.title || scrapeResult?.title,
+      scrapeResult?.communityName
+    );
 
     const newTask: DownloadTask = {
       id: taskId,
@@ -200,6 +262,8 @@ export default function App() {
       receivedBytes: 0,
       totalBytes: 0,
       speedBytesPerSec: 0,
+      markdownContent: markdownText,
+      markdownDownloaded: false,
       startedAt: Date.now(),
       abortController,
     };
@@ -225,12 +289,18 @@ export default function App() {
         setDownloadTasks((prev) =>
           prev.map((t) =>
             t.id === taskId
-              ? { ...t, blobUrl, status: 'completed', completedAt: Date.now() }
+              ? {
+                  ...t,
+                  blobUrl,
+                  status: 'completed',
+                  completedAt: Date.now(),
+                  markdownDownloaded: autoDownloadMarkdown,
+                }
               : t
           )
         );
 
-        // Save file locally to user's downloads folder
+        // 1. Save video MP4 file locally to user's downloads folder
         const downloadAnchor = document.createElement('a');
         downloadAnchor.href = blobUrl;
         downloadAnchor.download = result.filename;
@@ -243,7 +313,19 @@ export default function App() {
           }
         }, 5000);
 
-        showToast(`¡Video descargado exitosamente: "${result.filename}"!`);
+        // 2. If autoDownloadMarkdown is enabled, also download accompanying .md file!
+        if (autoDownloadMarkdown && markdownText) {
+          setTimeout(() => {
+            const baseTitle = result.filename.replace(/\.mp4$/i, '');
+            downloadMarkdownFile(`${baseTitle}.md`, markdownText);
+          }, 800);
+        }
+
+        showToast(
+          autoDownloadMarkdown
+            ? `¡Video (.mp4) y Notas (.md) descargados: "${video.title}"!`
+            : `¡Video descargado exitosamente: "${result.filename}"!`
+        );
       }
     } catch (err: any) {
       if (abortController.signal.aborted) {
@@ -437,6 +519,7 @@ export default function App() {
             onCancelDownload={handleCancelTask}
             onPreviewVideo={(v) => setPreviewVideo(v)}
             onDownloadVideo={handleDownloadVideo}
+            onOpenNotes={(v) => setSelectedNotesVideo(v)}
             onBackToCourses={
               scrapeResult.communityName
                 ? () => handleScrapeUrl(`https://www.skool.com/${scrapeResult.communityName}/classroom`)
@@ -451,7 +534,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Motor CDN directo estilo Extensión de Navegador con descarga ultrarrápida MP4</span>
+            <span>Motor CDN directo estilo Extensión con exportador de texto y notas Markdown (.md)</span>
           </div>
           <div className="flex items-center gap-4">
             <button
@@ -485,6 +568,19 @@ export default function App() {
         onRetryTask={handleRetryTask}
         onClearHistory={handleClearHistory}
         onRemoveTask={handleRemoveTask}
+        autoDownloadMarkdown={autoDownloadMarkdown}
+        onToggleAutoDownloadMarkdown={(val) => setAutoDownloadMarkdown(val)}
+      />
+
+      <LessonNotesModal
+        isOpen={!!selectedNotesVideo}
+        onClose={() => setSelectedNotesVideo(null)}
+        video={selectedNotesVideo}
+        courseTitle={scrapeResult?.currentCourse?.title || scrapeResult?.title}
+        courseId={scrapeResult?.currentCourse?.name || scrapeResult?.currentCourse?.id}
+        communityName={scrapeResult?.communityName}
+        userCookies={cookies}
+        onUpdateVideoDesc={handleUpdateVideoDesc}
       />
 
       <CookieManagerModal

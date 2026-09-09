@@ -100,6 +100,8 @@ export interface DownloadTask {
   blobUrl?: string;
   format?: 'MP4' | 'HLS';
   resolution?: string;
+  markdownContent?: string;
+  markdownDownloaded?: boolean;
   startedAt: number;
   completedAt?: number;
   abortController?: AbortController;

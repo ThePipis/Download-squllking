@@ -89,6 +89,19 @@ function extractVideosFromTree(node: any, sectionName = ''): SkoolVideo[] {
   return results;
 }
 
+function findNodeInTree(node: any, targetId: string): any {
+  if (!node) return null;
+  const item = node.course || node;
+  if (item.id === targetId) return item;
+  if (node.children && Array.isArray(node.children)) {
+    for (const child of node.children) {
+      const found = findNodeInTree(child, targetId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 // 1. Get initial pre-loaded cookies
 app.get('/api/default-cookies', (_req: Request, res: Response) => {
   res.json({ cookies: INITIAL_COOKIES });
@@ -187,7 +200,7 @@ app.post('/api/scrape', async (req: Request, res: Response) => {
       try {
         const directJson = JSON.parse(html);
         if (directJson.props?.pageProps) {
-          return handlePageProps(directJson.props.pageProps, res);
+          return await handlePageProps(directJson.props.pageProps, res, directJson.buildId, cookieStr);
         }
       } catch {
         // not raw json
@@ -202,6 +215,7 @@ app.post('/api/scrape', async (req: Request, res: Response) => {
 
     const nextData = JSON.parse(nextDataMatch[1]);
     const pageProps = nextData.props?.pageProps;
+    const buildId = nextData.buildId;
 
     if (!pageProps) {
       return res.status(422).json({
@@ -210,14 +224,14 @@ app.post('/api/scrape', async (req: Request, res: Response) => {
       });
     }
 
-    return handlePageProps(pageProps, res);
+    return await handlePageProps(pageProps, res, buildId, cookieStr);
   } catch (error: any) {
     console.error('Error en scrape:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
 
-function handlePageProps(pageProps: any, res: Response) {
+async function handlePageProps(pageProps: any, res: Response, buildId?: string, cookieStr?: string) {
   const currentGroup = pageProps.currentGroup;
   const communityName = currentGroup?.name || currentGroup?.metadata?.title || 'Skool Community';
 
@@ -233,6 +247,49 @@ function handlePageProps(pageProps: any, res: Response) {
     };
 
     const videos = extractVideosFromTree(courseNode);
+
+    // Auto-fetch missing descriptions and resources for all lessons in the course
+    const groupName = currentGroup?.name;
+    const courseSlugOrId = currentCourse.name || currentCourse.id;
+
+    if (buildId && groupName && courseSlugOrId) {
+      const missingVideos = videos.filter((v) => !v.desc || v.desc.trim().length === 0);
+      if (missingVideos.length > 0) {
+        await Promise.all(
+          missingVideos.slice(0, 50).map(async (v) => {
+            try {
+              const url = `https://www.skool.com/_next/data/${buildId}/${groupName}/classroom/${courseSlugOrId}.json?md=${v.id}`;
+              const dataRes = await fetch(url, {
+                headers: {
+                  Cookie: cookieStr || '',
+                  'User-Agent': DEFAULT_USER_AGENT,
+                  Accept: '*/*',
+                  'x-nextjs-data': '1',
+                  Referer: `https://www.skool.com/${groupName}/classroom/${courseSlugOrId}`,
+                },
+              });
+              if (dataRes.ok) {
+                const data = await dataRes.json();
+                const node = findNodeInTree(data.pageProps?.course, v.id);
+                if (node?.metadata?.desc) {
+                  v.desc = node.metadata.desc;
+                }
+                if (node?.metadata?.resources) {
+                  try {
+                    v.resources =
+                      typeof node.metadata.resources === 'string'
+                        ? JSON.parse(node.metadata.resources)
+                        : node.metadata.resources;
+                  } catch {}
+                }
+              }
+            } catch (err: any) {
+              console.warn(`Pre-fetch error for module ${v.id}:`, err.message);
+            }
+          })
+        );
+      }
+    }
 
     return res.json({
       success: true,
@@ -273,6 +330,73 @@ function handlePageProps(pageProps: any, res: Response) {
     error: 'No se detectó un curso ni una lista de cursos en los datos de la página proporcionada.',
   });
 }
+
+// 3.5. Fetch single lesson details on demand (fallback & dynamic refresh)
+app.post('/api/lesson-details', async (req: Request, res: Response) => {
+  try {
+    const { communityName, courseId, lessonId, cookies } = req.body;
+    if (!communityName || !courseId || !lessonId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Faltan parámetros requeridos (communityName, courseId, lessonId)',
+      });
+    }
+    const cookieList: CookieItem[] = cookies || INITIAL_COOKIES;
+    const cookieStr = buildCookieString(cookieList);
+
+    const targetUrl = `https://www.skool.com/${communityName}/classroom/${courseId}?md=${lessonId}`;
+    const pageRes = await fetch(targetUrl, {
+      headers: {
+        Cookie: cookieStr,
+        'User-Agent': DEFAULT_USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Referer: 'https://www.skool.com/',
+      },
+    });
+
+    if (!pageRes.ok) {
+      return res.status(pageRes.status).json({
+        success: false,
+        error: `Error HTTP ${pageRes.status} al consultar lección en Skool`,
+      });
+    }
+
+    const html = await pageRes.text();
+    const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!nextDataMatch) {
+      return res.status(422).json({
+        success: false,
+        error: 'No se pudo leer __NEXT_DATA__ de la lección',
+      });
+    }
+
+    const nextData = JSON.parse(nextDataMatch[1]);
+    const courseNode = nextData.props?.pageProps?.course;
+    const node = findNodeInTree(courseNode, lessonId);
+
+    let resources: any[] = [];
+    if (node?.metadata?.resources) {
+      try {
+        resources =
+          typeof node.metadata.resources === 'string'
+            ? JSON.parse(node.metadata.resources)
+            : node.metadata.resources;
+      } catch {}
+    }
+
+    return res.json({
+      success: true,
+      lessonId,
+      title: node?.metadata?.title || '',
+      desc: node?.metadata?.desc || '',
+      resources,
+      videoLink: node?.metadata?.videoLink || '',
+    });
+  } catch (error: any) {
+    console.error('Error in lesson-details:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Helper to resolve Vimeo HLS / Progressive streams
 async function resolveVimeo(url: string, cookies?: CookieItem[]) {

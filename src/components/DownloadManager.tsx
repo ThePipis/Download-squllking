@@ -19,7 +19,9 @@ import {
   Layers,
   ChevronDown,
   ChevronUp,
+  FileText,
 } from 'lucide-react';
+import { downloadMarkdownFile } from '../utils/markdownExporter.ts';
 
 interface DownloadManagerProps {
   isOpen: boolean;
@@ -29,6 +31,8 @@ interface DownloadManagerProps {
   onRetryTask: (task: DownloadTask) => void;
   onClearHistory: () => void;
   onRemoveTask: (taskId: string) => void;
+  autoDownloadMarkdown?: boolean;
+  onToggleAutoDownloadMarkdown?: (val: boolean) => void;
 }
 
 export const DownloadManager: React.FC<DownloadManagerProps> = ({
@@ -39,6 +43,8 @@ export const DownloadManager: React.FC<DownloadManagerProps> = ({
   onRetryTask,
   onClearHistory,
   onRemoveTask,
+  autoDownloadMarkdown = true,
+  onToggleAutoDownloadMarkdown,
 }) => {
   const [activeTab, setActiveTab] = useState<'downloads' | 'settings'>('downloads');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -154,6 +160,30 @@ export const DownloadManager: React.FC<DownloadManagerProps> = ({
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {activeTab === 'settings' ? (
             <div className="space-y-3 text-xs text-slate-600">
+              {/* Option to automatically download markdown notes */}
+              {onToggleAutoDownloadMarkdown && (
+                <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-semibold text-indigo-950">
+                      <FileText className="w-4 h-4 text-indigo-600" />
+                      <span>Descargar Notas Markdown (.md) junto al Video</span>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoDownloadMarkdown}
+                        onChange={(e) => onToggleAutoDownloadMarkdown(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                  </div>
+                  <p className="text-[11px] text-indigo-800/80 leading-relaxed">
+                    Al descargar un video, también se guardará automáticamente un archivo <code>.md</code> con toda la descripción, texto explicativo, listas y enlaces que aparecen al pie de la lección en Skool.
+                  </p>
+                </div>
+              )}
+
               <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800">
                 <div className="flex items-center gap-2 font-semibold text-emerald-900 mb-1">
                   <Sparkles className="w-4 h-4 text-emerald-600" />
@@ -323,6 +353,18 @@ export const DownloadManager: React.FC<DownloadManagerProps> = ({
                                 ) : (
                                   <Copy className="w-3.5 h-3.5" />
                                 )}
+                              </button>
+                            )}
+
+                            {task.markdownContent && (
+                              <button
+                                onClick={() =>
+                                  downloadMarkdownFile(`${task.title}.md`, task.markdownContent!)
+                                }
+                                title="Descargar notas de la lección (.md)"
+                                className="p-1 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-100 rounded transition-colors"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
                               </button>
                             )}
 

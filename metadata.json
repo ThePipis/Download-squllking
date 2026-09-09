@@ -1,6 +1,6 @@
 {
   "name": "Skool Video Downloader",
-  "description": "Descarga videos de Skool Classroom en formato MP4 de alta calidad a partir de enlaces de cursos y lecciones con cookies de sesión.",
+  "description": "Descarga videos de Skool Classroom en formato MP4 de alta calidad y exporta el texto y las notas de las lecciones en Markdown (.md) a partir de enlaces de cursos con cookies de sesión.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
