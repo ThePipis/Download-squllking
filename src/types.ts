@@ -34,6 +34,24 @@ export interface SkoolVideo {
   desc?: string;
   resources?: LessonResource[];
   resolvedQuality?: string;
+  hasVideo?: boolean;
+  hasText?: boolean;
+  hasImages?: boolean;
+  imageUrls?: string[];
+  unitType?: string;
+}
+
+export interface ZipBatchProgress {
+  status: 'idle' | 'preparing' | 'downloading' | 'compressing' | 'completed' | 'error' | 'cancelled';
+  totalCourses: number;
+  currentCourseIndex: number;
+  currentCourseTitle: string;
+  totalLessons: number;
+  currentLessonIndex: number;
+  currentLessonTitle: string;
+  overallPercent: number;
+  message: string;
+  error?: string;
 }
 
 export interface SkoolCourse {

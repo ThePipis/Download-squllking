@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { INITIAL_COOKIES } from './data/defaultCookies.ts';
-import { CookieItem, ScrapeResult, SkoolVideo, SkoolCourse, DownloadTask } from './types.ts';
+import { CookieItem, ScrapeResult, SkoolVideo, SkoolCourse, DownloadTask, ZipBatchProgress } from './types.ts';
 import { InputPanel } from './components/InputPanel.tsx';
 import { CourseVideoList } from './components/CourseVideoList.tsx';
 import { ClassroomExplorer } from './components/ClassroomExplorer.tsx';
@@ -9,8 +9,10 @@ import { HowToGuideModal } from './components/HowToGuideModal.tsx';
 import { VideoPreviewModal } from './components/VideoPreviewModal.tsx';
 import { DownloadManager } from './components/DownloadManager.tsx';
 import { LessonNotesModal } from './components/LessonNotesModal.tsx';
+import { ZipBatchModal } from './components/ZipBatchModal.tsx';
 import { downloadVideoWithProgress } from './utils/downloadEngine.ts';
 import { buildLessonMarkdown, downloadMarkdownFile } from './utils/markdownExporter.ts';
+import { downloadCommunityClassroomZip, downloadSingleCourseZip } from './utils/zipPacker.ts';
 import {
   ShieldCheck,
   Key,
@@ -62,6 +64,11 @@ export default function App() {
 
   // Lesson Notes modal state
   const [selectedNotesVideo, setSelectedNotesVideo] = useState<SkoolVideo | null>(null);
+
+  // ZIP Batch Download state
+  const [zipProgress, setZipProgress] = useState<ZipBatchProgress | null>(null);
+  const [isZipModalOpen, setIsZipModalOpen] = useState(false);
+  const [zipAbortController, setZipAbortController] = useState<AbortController | null>(null);
 
   // Auto-save cookies to localStorage
   const handleSaveCookies = (newCookies: CookieItem[]) => {
@@ -375,6 +382,80 @@ export default function App() {
     setDownloadTasks((prev) => prev.filter((t) => t.id !== taskId));
   };
 
+  // ZIP Batch Download handlers
+  const handleDownloadCommunityCoursesZip = async (selectedCourses: SkoolCourse[]) => {
+    if (selectedCourses.length === 0) return;
+    const controller = new AbortController();
+    setZipAbortController(controller);
+    setIsZipModalOpen(true);
+
+    try {
+      await downloadCommunityClassroomZip({
+        communityName: scrapeResult?.communityName || 'skool_community',
+        courses: selectedCourses,
+        cookies,
+        includeVideos: true,
+        includeMarkdown: true,
+        includeImages: true,
+        onProgress: (progress) => {
+          setZipProgress({ ...progress });
+        },
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      if (controller.signal.aborted) {
+        showToast('Empaquetado ZIP cancelado');
+      } else {
+        setErrorMessage(`Error en descarga por lotes: ${err.message}`);
+      }
+    }
+  };
+
+  const handleDownloadSingleCourseZip = async (selectedVideos?: SkoolVideo[]) => {
+    const courseTitle = scrapeResult?.currentCourse?.title || scrapeResult?.title || 'Curso';
+    const videosToDownload =
+      selectedVideos && selectedVideos.length > 0
+        ? selectedVideos
+        : (scrapeResult?.videos || []);
+
+    if (videosToDownload.length === 0) {
+      showToast('No hay lecciones para descargar');
+      return;
+    }
+
+    const controller = new AbortController();
+    setZipAbortController(controller);
+    setIsZipModalOpen(true);
+
+    try {
+      await downloadSingleCourseZip({
+        courseTitle,
+        communityName: scrapeResult?.communityName || 'skool',
+        videos: videosToDownload,
+        cookies,
+        includeVideos: true,
+        includeMarkdown: true,
+        includeImages: true,
+        onProgress: (progress) => {
+          setZipProgress({ ...progress });
+        },
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      if (controller.signal.aborted) {
+        showToast('Empaquetado ZIP cancelado');
+      } else {
+        setErrorMessage(`Error en descarga por lotes: ${err.message}`);
+      }
+    }
+  };
+
+  const handleCancelZipBatch = () => {
+    if (zipAbortController) {
+      zipAbortController.abort();
+    }
+  };
+
   // Initial load: automatically load the user's paid Nuclear classroom course!
   useEffect(() => {
     handleScrapeUrl('https://www.skool.com/nuclear/classroom/75e6bd71?md=786f65c7d5984a7e9715ba74418b7190');
@@ -505,6 +586,8 @@ export default function App() {
             communityName={scrapeResult.communityName}
             onSelectCourse={handleSelectCourse}
             isLoadingCourse={isLoadingCourse}
+            onDownloadCoursesZip={handleDownloadCommunityCoursesZip}
+            isDownloadingZip={isZipModalOpen && zipProgress?.status === 'downloading'}
           />
         )}
 
@@ -520,6 +603,8 @@ export default function App() {
             onPreviewVideo={(v) => setPreviewVideo(v)}
             onDownloadVideo={handleDownloadVideo}
             onOpenNotes={(v) => setSelectedNotesVideo(v)}
+            onDownloadCourseZip={handleDownloadSingleCourseZip}
+            isDownloadingZip={isZipModalOpen && zipProgress?.status === 'downloading'}
             onBackToCourses={
               scrapeResult.communityName
                 ? () => handleScrapeUrl(`https://www.skool.com/${scrapeResult.communityName}/classroom`)
@@ -599,6 +684,13 @@ export default function App() {
         video={previewVideo}
         onClose={() => setPreviewVideo(null)}
         onDownload={handleDownloadVideo}
+      />
+
+      <ZipBatchModal
+        isOpen={isZipModalOpen}
+        progress={zipProgress}
+        onClose={() => setIsZipModalOpen(false)}
+        onCancel={handleCancelZipBatch}
       />
     </div>
   );

@@ -41,20 +41,34 @@ function extractVideosFromTree(node: any, sectionName = ''): SkoolVideo[] {
   const title = item.metadata?.title || item.name || 'Sin título';
   const currentSection = item.unitType === 'set' ? title : sectionName;
 
-  const videoLink = item.metadata?.videoLink || '';
-  const muxPlaybackId = item.metadata?.muxPlaybackId || '';
-  const directVideo = item.metadata?.video;
-  let finalVideoLink = videoLink;
+  // Determine if this item is a lesson/module (not a container folder/course/set)
+  const isContainer = item.unitType === 'course' || item.unitType === 'set';
+  const isLesson =
+    !isContainer &&
+    (item.unitType === 'module' || !node.children || node.children.length === 0);
 
-  if (!finalVideoLink && muxPlaybackId) {
-    finalVideoLink = `https://stream.mux.com/${muxPlaybackId}.m3u8`;
-  } else if (!finalVideoLink && typeof directVideo === 'string' && directVideo.startsWith('http')) {
-    finalVideoLink = directVideo;
-  } else if (!finalVideoLink && typeof directVideo === 'object' && directVideo?.video_url) {
-    finalVideoLink = directVideo.video_url;
-  }
+  if (isLesson) {
+    const videoLink = item.metadata?.videoLink || '';
+    const muxPlaybackId = item.metadata?.muxPlaybackId || '';
+    const directVideo = item.metadata?.video;
+    let finalVideoLink = videoLink;
 
-  if (finalVideoLink) {
+    if (!finalVideoLink && muxPlaybackId) {
+      finalVideoLink = `https://stream.mux.com/${muxPlaybackId}.m3u8`;
+    } else if (
+      !finalVideoLink &&
+      typeof directVideo === 'string' &&
+      directVideo.startsWith('http')
+    ) {
+      finalVideoLink = directVideo;
+    } else if (
+      !finalVideoLink &&
+      typeof directVideo === 'object' &&
+      directVideo?.video_url
+    ) {
+      finalVideoLink = directVideo.video_url;
+    }
+
     let resources = [];
     try {
       if (typeof item.metadata?.resources === 'string') {
@@ -66,17 +80,44 @@ function extractVideosFromTree(node: any, sectionName = ''): SkoolVideo[] {
       resources = [];
     }
 
+    const descStr = typeof item.metadata?.desc === 'string' ? item.metadata.desc : '';
+    const hasVideo = Boolean(finalVideoLink && finalVideoLink.trim().length > 0);
+    const hasText = Boolean(descStr && descStr.trim().length > 0);
+
+    // Extract image URLs from description
+    const imageUrls: string[] = [];
+    if (descStr) {
+      const imgMatches = descStr.match(/https:\/\/[^\s"'<>\\]+?\.(?:png|jpg|jpeg|webp|gif)/gi);
+      if (imgMatches) {
+        imgMatches.forEach((img) => {
+          if (
+            !imageUrls.includes(img) &&
+            !img.includes('avatar') &&
+            !img.includes('favicon') &&
+            !img.includes('slack-protected-video')
+          ) {
+            imageUrls.push(img);
+          }
+        });
+      }
+    }
+
     results.push({
       id: item.id || Math.random().toString(36).substring(2),
       title: title.trim(),
       section: sectionName || 'General',
-      videoLink: finalVideoLink,
-      provider: detectProvider(finalVideoLink),
+      videoLink: finalVideoLink || '',
+      provider: hasVideo ? detectProvider(finalVideoLink) : 'unknown',
       thumbnail: item.metadata?.videoThumbnail || item.metadata?.coverImage || '',
       durationMs: item.metadata?.videoLenMs || 0,
       hasAccess: item.metadata?.hasAccess !== 0,
-      desc: typeof item.metadata?.desc === 'string' ? item.metadata.desc : '',
+      desc: descStr,
       resources,
+      hasVideo,
+      hasText,
+      hasImages: imageUrls.length > 0,
+      imageUrls,
+      unitType: item.unitType || 'module',
     });
   }
 
@@ -273,6 +314,24 @@ async function handlePageProps(pageProps: any, res: Response, buildId?: string, 
                 const node = findNodeInTree(data.pageProps?.course, v.id);
                 if (node?.metadata?.desc) {
                   v.desc = node.metadata.desc;
+                  v.hasText = Boolean(v.desc && v.desc.trim().length > 0);
+                  const imgMatches = v.desc.match(
+                    /https:\/\/[^\s"'<>\\]+?\.(?:png|jpg|jpeg|webp|gif)/gi
+                  );
+                  if (imgMatches) {
+                    v.imageUrls = v.imageUrls || [];
+                    imgMatches.forEach((img) => {
+                      if (
+                        !v.imageUrls!.includes(img) &&
+                        !img.includes('avatar') &&
+                        !img.includes('favicon') &&
+                        !img.includes('slack-protected-video')
+                      ) {
+                        v.imageUrls!.push(img);
+                      }
+                    });
+                    v.hasImages = v.imageUrls.length > 0;
+                  }
                 }
                 if (node?.metadata?.resources) {
                   try {
@@ -395,6 +454,34 @@ app.post('/api/lesson-details', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error in lesson-details:', error);
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 3.6. Proxy image to allow clean local blob downloads without CORS issues
+app.get('/api/proxy-image', async (req: Request, res: Response) => {
+  try {
+    const imageUrl = req.query.url as string;
+    if (!imageUrl || !imageUrl.startsWith('http')) {
+      return res.status(400).send('URL de imagen no válida');
+    }
+    const cookieStr = buildCookieString(INITIAL_COOKIES);
+    const imgRes = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': DEFAULT_USER_AGENT,
+        Referer: 'https://www.skool.com/',
+        Cookie: cookieStr,
+      },
+    });
+    if (!imgRes.ok) {
+      return res.status(imgRes.status).send('No se pudo obtener la imagen');
+    }
+    const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    const buffer = Buffer.from(await imgRes.arrayBuffer());
+    return res.send(buffer);
+  } catch (err: any) {
+    return res.status(500).send(err.message);
   }
 });
 
